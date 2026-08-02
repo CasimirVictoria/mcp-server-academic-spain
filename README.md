@@ -7,6 +7,32 @@ An open-source **Model Context Protocol (MCP) server** for unified scientific li
 
 ---
 
+## 🏗️ Architecture & Ecosystem Integration
+
+This server is part of a modular, sovereign **Academic Knowledge & AI Platform**. It interoperates seamlessly with companion MCP servers and frontends:
+
+```
+                  ┌─────────────────────────────────────┐
+                  │          AGY-Bridge / PWA           │
+                  │   (Mobile Hub & Speech-to-Text)    │
+                  └──────────────────┬──────────────────┘
+                                     │
+                  ┌──────────────────┴──────────────────┐
+                  │    Google Antigravity AI Engine     │
+                  └─┬─────────────────┬───────────────┬─┘
+                    │                 │               │
+  ┌─────────────────▼───┐  ┌──────────▼──────────┐  ┌─▼──────────────────┐
+  │ mcp-server-academic │  │ mcp-server-eduvpn   │  │ mcp-server-jupyter │
+  │ (Dialnet/CSIC/Open) │  │ (EduVPN / Network)  │  │ (SageMath/Python)  │
+  └─────────────────────┘  └─────────────────────┘  └────────────────────┘
+```
+
+- **Integration with `mcp-server-eduvpn`:** Automatically queries subscription-restricted academic databases (Scopus, WoS, university library portals) when institutional VPN is active.
+- **Integration with `mcp-server-jupyter`:** Allows retrieved datasets and mathematical models to be processed and simulated directly in local JupyterLab/SageMath kernels.
+- **Integration with `agy-bridge`:** Enables voice-activated scientific queries from mobile devices over a private Tailscale WireGuard mesh.
+
+---
+
 ## ✨ Features
 
 - **🇪🇸 Spanish Academic Repositories:** Direct querying of Dialnet, Teseo (doctoral theses), and CSIC repositories.
