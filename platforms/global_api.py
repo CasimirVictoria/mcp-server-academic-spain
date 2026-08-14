@@ -200,48 +200,58 @@ class ScopusSearcher(PaperSource):
 
 class WOSSearcher(PaperSource):
     """Web of Science (WOS) Starter API - Clarivate."""
-    BASE_URL = "https://api.clarivate.com/apis/wos-starter/v1/search"
-    
-    async def search(self, query: str, limit: int = 5, **kwargs) -> List[Paper]:
+    BASE_URL = "https://api.clarivate.com/apis/wos-starter/v1/documents"
+
+    async def search(self, query: str, max_results: int = 10) -> List[Paper]:
         api_key = os.getenv("WOS_API_KEY", "")
         if not api_key:
             logger.warning("WOS_API_KEY is empty in WOSSearcher!")
             return []
-            
+
         headers = {"X-ApiKey": api_key, "Accept": "application/json"}
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
-            try:
-                params = {"q": query, "limit": limit, "page": 1}
+        params = {"q": f"TS=({query})", "limit": max_results}
+
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 logger.info(f"Searching WOS with query: {query}")
-                response = await client.get(self.BASE_URL, params=params, headers=headers)
-                logger.info(f"WOS response status: {response.status_code}")
-                
+                response = await client.get(self.BASE_URL, headers=headers, params=params)
                 if response.status_code != 200:
                     logger.error(f"WOS error: {response.text}")
                     return []
-                
-                hits = response.json().get("hits", [])
-                logger.info(f"WOS found {len(hits)} hits")
-                
-                output = []
-                for item in hits:
-                    source_info = item.get("source", {})
-                    pub_date = item.get("pubDate", "N/A")
-                    authors = [a.get("displayName", "N/A") for a in item.get("names", {}).get("authors", [])]
-                    
-                    output.append(Paper(
-                        paper_id=item.get("uid", item.get("title", "")),
-                        title=item.get("title", "N/A"),
+
+                data = response.json()
+                papers = []
+                for item in data.get("hits", []):
+                    title = item.get("title", "")
+                    doi = next((id_val.get("value") for id_val in item.get("identifiers", {}).get("doi", [])), None) if isinstance(item.get("identifiers", {}).get("doi"), list) else item.get("identifiers", {}).get("doi")
+                    if not doi and "doi" in item:
+                        doi = item.get("doi")
+
+                    authors = []
+                    for author in item.get("names", {}).get("authors", []):
+                        if isinstance(author, dict) and "displayName" in author:
+                            authors.append(author["displayName"])
+                        elif isinstance(author, str):
+                            authors.append(author)
+
+                    year = item.get("source", {}).get("publishYear")
+                    url = f"https://doi.org/{doi}" if doi else f"https://www.webofscience.com/wos/woscc/full-record/{item.get('uid', '')}"
+
+                    papers.append(Paper(
+                        title=title,
                         authors=authors,
-                        published_date=pub_date[:4] if pub_date != "N/A" else "N/A",
-                        journal=source_info.get("title", "N/A"),
-                        url=item.get("links", {}).get("record", "https://www.webofscience.com/"),
-                        source="Web of Science"
+                        abstract="",
+                        year=int(year) if year and str(year).isdigit() else None,
+                        url=url,
+                        doi=doi,
+                        source="Web of Science",
+                        citations=item.get("citations", [{}])[0].get("count", 0) if isinstance(item.get("citations"), list) and item.get("citations") else 0
                     ))
-                return output
-            except Exception as e:
-                logger.error(f"WOS search failed: {e}")
-                return []
+
+                return papers
+        except Exception as e:
+            logger.error(f"WOS search failed: {e}")
+            return []
 
 class CrossRefSearcher(PaperSource):
     """CrossRef API for DOI-based metadata lookup and search."""
