@@ -431,6 +431,22 @@ async def handle_list_tools() -> List[types.Tool]:
     sources_desc = ", ".join(SEARCHER_CLASSES.keys())
     return [
         types.Tool(
+            name="get_bibtex",
+            description="Fetches official publisher BibTeX citation via CrossRef Content Negotiation for any DOI or academic URL, cleans the citekey, and optionally appends it to references.bib.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "doi": {"type": "string", "description": "DOI string (e.g. '10.1088/1742-6596/3037/1/012006') or full DOI URL"},
+                    "save_to_file": {
+                        "type": "string",
+                        "default": "/home/casimir/Documents/Segon_Cervell/TFM/references.bib",
+                        "description": "Optional file path to append the BibTeX entry to (e.g. 'references.bib')"
+                    }
+                },
+                "required": ["doi"]
+            }
+        ),
+        types.Tool(
             name="search_academic_spain",
             description=f"Search across multiple Spanish and global academic sources ({sources_desc}).",
             inputSchema={
@@ -819,6 +835,47 @@ async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[types.T
         else:
             return [types.TextContent(type="text", text=json.dumps(
                 {"error": f"Acció desconeguda: {action}. Usa 'status', 'connect' o 'disconnect'"}))]
+
+
+    elif name == "get_bibtex":
+        raw_doi = arguments.get("doi", "").strip()
+        save_file = arguments.get("save_to_file")
+        clean_doi = raw_doi.replace("https://doi.org/", "").replace("http://dx.doi.org/", "").strip()
+        url = f"https://doi.org/{clean_doi}"
+        headers = {"Accept": "application/x-bibtex; charset=utf-8"}
+        
+        try:
+            import httpx
+            async with httpx.AsyncClient(follow_redirects=True, timeout=12.0) as client:
+                resp = await client.get(url, headers=headers)
+                if resp.status_code != 200:
+                    return [types.TextContent(type="text", text=f"Error obtenint BibTeX per al DOI {clean_doi} (HTTP {resp.status_code})")]
+                
+                bib = resp.text.strip()
+                m = re.search(r'@[a-zA-Z]+\{([^,]+),', bib)
+                key = m.group(1) if m else "unknown_key"
+                quarto_cite = f"[@{key}]"
+                
+                saved_msg = ""
+                if save_file:
+                    save_path = os.path.abspath(os.path.expanduser(save_file))
+                    os.makedirs(os.path.dirname(save_path), exist_ok=True)
+                    existing = ""
+                    if os.path.exists(save_path):
+                        with open(save_path, "r", encoding="utf-8") as f_in:
+                            existing = f_in.read()
+                    
+                    if key in existing:
+                        saved_msg = f"\n\nℹ️ La referència ja estava present a `{save_path}`."
+                    else:
+                        with open(save_path, "a", encoding="utf-8") as f_out:
+                            f_out.write(f"\n\n{bib}\n")
+                        saved_msg = f"\n\n✅ Guardada automàticament a `{save_path}`!"
+                        
+                msg = f"### 📚 Cita BibTeX Oficial (CrossRef Content Negotiation)\n\n```bibtex\n{bib}\n```\n\n- **Clau Quarto Markdown:** `{quarto_cite}`{saved_msg}"
+                return [types.TextContent(type="text", text=msg)]
+        except Exception as e:
+            return [types.TextContent(type="text", text=f"Excepció en obtenir BibTeX: {e}")]
 
 async def main():
     import argparse
