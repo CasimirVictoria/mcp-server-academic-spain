@@ -838,6 +838,7 @@ async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[types.T
 
 
     elif name == "get_bibtex":
+        import datetime
         raw_doi = arguments.get("doi", "").strip()
         save_file = arguments.get("save_to_file")
         clean_doi = raw_doi.replace("https://doi.org/", "").replace("http://dx.doi.org/", "").strip()
@@ -856,6 +857,34 @@ async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[types.T
                 key = m.group(1) if m else "unknown_key"
                 quarto_cite = f"[@{key}]"
                 
+                abstract_text = ""
+                paper_title = key
+                authors_list = []
+                pub_year = ""
+                try:
+                    meta_url = f"https://api.crossref.org/works/{clean_doi}"
+                    meta_resp = await client.get(meta_url, timeout=8.0)
+                    if meta_resp.status_code == 200:
+                        meta_data = meta_resp.json().get("message", {})
+                        abstract_text = meta_data.get("abstract", "")
+                        abstract_text = re.sub(r'<[^>]+>', '', abstract_text).strip()
+                        titles = meta_data.get("title", [])
+                        if titles:
+                            paper_title = titles[0]
+                        for a in meta_data.get("author", []):
+                            given = a.get("given", "")
+                            family = a.get("family", "")
+                            authors_list.append(f"{given} {family}".strip() if given or family else "")
+                        date_parts = meta_data.get("published-print", {}).get("date-parts") or meta_data.get("published-online", {}).get("date-parts") or meta_data.get("created", {}).get("date-parts")
+                        if date_parts and date_parts[0]:
+                            pub_year = str(date_parts[0][0])
+                except Exception as meta_err:
+                    logger.warning(f"Could not fetch CrossRef metadata abstract: {meta_err}")
+
+                if abstract_text and "abstract=" not in bib.lower():
+                    clean_abstract_bib = abstract_text.replace("{", "(").replace("}", ")").replace('"', "'")
+                    bib = re.sub(r'\s*\}\s*$', ',\n  abstract={' + clean_abstract_bib + '}\n}', bib)
+
                 saved_msg = ""
                 if save_file:
                     save_path = os.path.abspath(os.path.expanduser(save_file))
@@ -866,16 +895,66 @@ async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[types.T
                             existing = f_in.read()
                     
                     if key in existing:
-                        saved_msg = f"\n\nℹ️ La referència ja estava present a `{save_path}`."
+                        saved_msg = f"\n- **BibTeX:** La referència ja estava present a `{save_path}`."
                     else:
                         with open(save_path, "a", encoding="utf-8") as f_out:
                             f_out.write(f"\n\n{bib}\n")
-                        saved_msg = f"\n\n✅ Guardada automàticament a `{save_path}`!"
+                        saved_msg = f"\n- **BibTeX:** Guardada automàticament a `{save_path}`!"
+
+                denote_msg = ""
+                try:
+                    notes_dir = "/home/casimir/Documents/Segon_Cervell/Notes"
+                    if os.path.exists(notes_dir):
+                        now = datetime.datetime.now()
+                        timestamp = now.strftime("%Y%m%dT%H%M%S")
+                        title_slug = re.sub(r'[^a-zA-Z0-9]+', '-', paper_title.lower()).strip('-')[:45]
+                        note_filename = f"{timestamp}=={key}--{title_slug}__tfm_recerca.md"
+                        note_path = os.path.join(notes_dir, note_filename)
                         
-                msg = f"### 📚 Cita BibTeX Oficial (CrossRef Content Negotiation)\n\n```bibtex\n{bib}\n```\n\n- **Clau Quarto Markdown:** `{quarto_cite}`{saved_msg}"
+                        authors_str = ", ".join([a for a in authors_list if a]) if authors_list else "Desconegut"
+                        abs_quote = abstract_text if abstract_text else 'No disponible en el moment de la creació.'
+                        
+                        note_content = f"""---
+title: "{paper_title}"
+date: {now.strftime('%Y-%m-%d')}
+tags: ["TFM", "recerca"]
+identifier: "{timestamp}"
+bibkey: "{key}"
+---
+
+# 📄 {paper_title}
+
+* **Autors:** {authors_str}
+* **Any:** {pub_year if pub_year else '-'}
+* **DOI:** [{clean_doi}](https://doi.org/{clean_doi})
+* **Clau Quarto:** `[@{key}]`
+* **Fitxer Local:** [PDF de l'Article](../TFM/PDFs/{key}.pdf)
+
+---
+
+## 📌 Abstract Oficial
+> {abs_quote}
+
+---
+
+## 💡 Idees Clau i Utilitat per al TFM
+* 
+"""
+                        existing_notes = [fn for fn in os.listdir(notes_dir) if f"=={key}" in fn]
+                        if not existing_notes:
+                            with open(note_path, "w", encoding="utf-8") as nf:
+                                nf.write(note_content)
+                            denote_msg = f"\n- **Fitxa Denote (Citar):** Creada a `Notes/{note_filename}` amb tags `[TFM, recerca]`."
+                        else:
+                            denote_msg = f"\n- **Fitxa Denote (Citar):** Ja existia una nota per a la clau `{key}`."
+                except Exception as denote_err:
+                    logger.warning(f"Could not create Denote note: {denote_err}")
+                        
+                msg = f"### 📚 Cita BibTeX i Fitxa Denote Oficials\n\n```bibtex\n{bib}\n```\n\n- **Clau Quarto Markdown:** `{quarto_cite}`{saved_msg}{denote_msg}"
                 return [types.TextContent(type="text", text=msg)]
         except Exception as e:
             return [types.TextContent(type="text", text=f"Excepció en obtenir BibTeX: {e}")]
+
 
 async def main():
     import argparse
