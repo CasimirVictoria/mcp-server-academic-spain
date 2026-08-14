@@ -465,8 +465,13 @@ async def handle_list_tools() -> List[types.Tool]:
                     "filename": {"type": "string", "description": "Optional filename to save as"},
                     "auto_vpn": {
                         "type": "boolean",
-                        "default": False,
-                        "description": "If true, auto-connect eduVPN before attempting download"
+                        "default": True,
+                        "description": "If true, auto-connect eduVPN before attempting paywalled downloads if not already connected"
+                    },
+                    "auto_disconnect": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "If true, auto-disconnect eduVPN after download completes if it was auto-connected by this tool"
                     }
                 },
                 "required": ["url"]
@@ -747,23 +752,31 @@ async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[types.T
     elif name == "download_paper":
         url = arguments.get("url")
         filename = arguments.get("filename")
-        auto_vpn = arguments.get("auto_vpn", False)
+        auto_vpn = arguments.get("auto_vpn", True)
+        auto_disconnect = arguments.get("auto_disconnect", True)
 
         vpn_was_active = await vpn_is_active()
-        vpn_connected_now = False
+        vpn_connected_by_us = False
 
-        # Auto-connect VPN if requested and not already active
+        # Auto-connect VPN if requested/needed and not already active
         if auto_vpn and not vpn_was_active:
-            logger.info("auto_vpn=True: connecting eduVPN before download...")
+            logger.info("Auto-connecting eduVPN before attempting paper download...")
             conn_result = await vpn_connect()
-            vpn_connected_now = conn_result["connected"]
-            if vpn_connected_now:
-                logger.info("eduVPN connected successfully")
+            vpn_connected_by_us = conn_result.get("connected", False)
+            if vpn_connected_by_us:
+                logger.info("eduVPN connected successfully for download")
                 await asyncio.sleep(2)  # let routing stabilize
             else:
-                logger.warning(f"VPN auto-connect failed: {conn_result['message']}")
+                logger.warning(f"VPN auto-connect failed: {conn_result.get('message')}")
 
-        res = await retriever.retrieve(url, filename)
+        try:
+            res = await retriever.retrieve(url, filename)
+        finally:
+            # Clean up: disconnect VPN if WE auto-connected it and auto_disconnect is True
+            if vpn_connected_by_us and auto_disconnect:
+                logger.info("Auto-disconnecting eduVPN after download completion...")
+                await vpn_disconnect()
+                logger.info("eduVPN auto-disconnected successfully")
 
         # Annotate result with VPN context
         try:
@@ -774,14 +787,9 @@ async def handle_call_tool(name: str, arguments: Dict[str, Any]) -> List[types.T
         vpn_active_now = await vpn_is_active()
         result_dict["vpn_status"] = {
             "was_active_before": vpn_was_active,
-            "auto_connect_attempted": auto_vpn and not vpn_was_active,
-            "active_during_download": vpn_active_now,
-            "hint": (
-                None if vpn_active_now
-                else "⚠️ La VPN (eduVPN) estava desconnectada. "
-                     "Articles de pagament de Scopus/WOS/editorials poden no ser accessibles. "
-                     "Connecta-la i reintenta, o usa auto_vpn=true."
-            )
+            "auto_connected_for_download": vpn_connected_by_us,
+            "auto_disconnected_after": vpn_connected_by_us and auto_disconnect,
+            "active_now": vpn_active_now
         }
 
         return [types.TextContent(type="text", text=json.dumps(result_dict, ensure_ascii=False, indent=2))]
